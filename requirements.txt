@@ -1,0 +1,8 @@
+numpy>=2.2.5
+opencv-python>=4.11.0.86
+opencv-python-headless>=4.11.0.86
+pdf2image>=1.17.0
+pillow>=11.2.1
+pypdf2>=3.0.1
+pytesseract>=0.3.13
+streamlit>=1.45.0
