@@ -173,12 +173,14 @@ def display_navigation_controls():
         col_slider, col_indicator = st.columns([3, 1])
         
         with col_slider:
-            new_page = st.slider("Page Navigation", 1, max(1, st.session_state.total_pages), 
-                                 st.session_state.current_page + 1) - 1
-            if new_page != st.session_state.current_page:
-                st.session_state.current_page = new_page
-                st.rerun()
-                
+            # Only show slider for multi-page documents
+            if st.session_state.total_pages > 1:
+                new_page = st.slider("Page Navigation", 1, st.session_state.total_pages, 
+                                    st.session_state.current_page + 1) - 1
+                if new_page != st.session_state.current_page:
+                    st.session_state.current_page = new_page
+                    st.rerun()
+                    
         with col_indicator:
             st.markdown(f"**Page {st.session_state.current_page + 1} of {st.session_state.total_pages}**")
 
