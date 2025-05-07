@@ -195,7 +195,7 @@ def display_content():
             else:  # Original view
                 if current_page < len(st.session_state.pdf_pages):
                     image = st.session_state.pdf_pages[current_page]
-                    st.image(image, caption=f"Page {current_page + 1}", use_column_width=True)
+                    st.image(image, caption=f"Page {current_page + 1}", use_container_width=True)
                 else:
                     st.warning("No image content available for this page.")
 
