@@ -4,6 +4,7 @@ import io
 import re
 from PIL import Image
 from ocr_processor import extract_text_from_image, enhance_text_extraction
+import streamlit as st
 
 def get_page_count(pdf_path):
     """Get the total number of pages in a PDF file"""
@@ -26,87 +27,66 @@ def clean_text(text):
     text = text.replace('|', 'I').replace('0', 'O')
     return text
 
-def process_pdf(pdf_path, dpi=300):
+def process_pdf(pdf_path):
     """
-    Process a PDF file, extracting both images and text using multiple methods
-    for improved reliability
+    Process a PDF file, extracting both images and text.
+    Ensures that the number of text entries matches the number of page images.
     
-    Args:
-        pdf_path: Path to the PDF file
-        dpi: DPI for image conversion (higher = better quality but slower)
-        
     Returns:
-    - list of PIL Image objects (one per page)
-    - list of extracted text (one string per page)
+    - list of PIL Image objects (one per page image)
+    - list of extracted text (one string per page image)
     """
-    pdf_images = []
+    pdf_images_pil = []
     extracted_texts = []
     
     try:
-        # Convert PDF pages to images with specified DPI for better OCR results
-        images = pdf2image.convert_from_path(pdf_path, dpi=dpi)
-        pdf_images = images
-        
-        # Process each page with multiple extraction methods
-        with open(pdf_path, 'rb') as file:
-            pdf_reader = PyPDF2.PdfReader(file)
-            
-            for i, page in enumerate(pdf_reader.pages):
-                # Method 1: Extract text directly from PDF
-                pdf_text = page.extract_text() or ""
-                pdf_text = clean_text(pdf_text)
-                
-                # Method 2: Use OCR on the page image
-                ocr_text = ""
-                if i < len(images):  # Ensure we have the corresponding image
-                    ocr_text = extract_text_from_image(images[i])
-                    ocr_text = clean_text(ocr_text)
-                
-                # Choose the best result or combine them
-                if len(pdf_text) > len(ocr_text) * 1.5:
-                    # PDF extraction gave significantly more text
-                    final_text = pdf_text
-                elif len(ocr_text) > len(pdf_text) * 1.2:
-                    # OCR gave significantly more text
-                    final_text = ocr_text
-                else:
-                    # Try to get the best of both worlds by enhancing
-                    final_text = enhance_text_extraction(pdf_text, ocr_text)
-                
-                extracted_texts.append(final_text)
-        
-        return pdf_images, extracted_texts
-        
-    except Exception as e:
-        print(f"Error processing PDF: {e}")
-        # Try fallback methods if main process failed
+        # Convert PDF pages to PIL Image objects
+        # This determines the number of pages we will process
+        page_images = pdf2image.convert_from_path(pdf_path)
+        pdf_images_pil = page_images # these are PIL Images
+
+        # Attempt to read text using PyPDF2 for pages that correspond to images
+        pypdf2_texts_map = {}
         try:
-            fallback_images = []
-            fallback_texts = []
+            with open(pdf_path, 'rb') as file_stream:
+                pdf_reader = PyPDF2.PdfReader(file_stream)
+                # Store PyPDF2 extracted text in a dictionary for quick lookup
+                # Only read up to the number of images we have, or pages PyPDF2 has, whichever is smaller
+                # to avoid issues if PyPDF2 sees more pages than pdf2image rendered.
+                for i, page_obj in enumerate(pdf_reader.pages):
+                    if i < len(page_images): # Ensure we don't try to map text beyond available images
+                        pypdf2_texts_map[i] = page_obj.extract_text()
+                    else:
+                        break # Stop if PyPDF2 has more pages than images from pdf2image
+        except Exception as e_pypdf:
+            print(f"Could not read PDF with PyPDF2 for direct text extraction: {e_pypdf}")
+            # Continue with OCR for all pages if PyPDF2 fails
+
+        # Iterate through each image obtained from pdf2image
+        for i, image_obj in enumerate(page_images):
+            text_from_pypdf2 = pypdf2_texts_map.get(i, "") # Get text for current image index if available
             
-            # Fallback method 1: Try to extract just text directly
-            with open(pdf_path, 'rb') as file:
-                pdf_reader = PyPDF2.PdfReader(file)
-                for page in pdf_reader.pages:
-                    text = page.extract_text() or "Text extraction failed"
-                    fallback_texts.append(text)
-                    
-            # If we got text but no images, try to at least get blank images
-            # to maintain the page structure
-            if fallback_texts and not fallback_images:
-                page_count = len(fallback_texts)
-                for _ in range(page_count):
-                    # Create a blank white image
-                    blank = Image.new('RGB', (800, 1100), (255, 255, 255))
-                    fallback_images.append(blank)
-                    
-            if fallback_images and fallback_texts:
-                print("Used fallback method for PDF processing")
-                return fallback_images, fallback_texts
-                
-        except Exception as fallback_error:
-            print(f"Fallback processing also failed: {fallback_error}")
+            # If text extraction from PyPDF2 yields little or no text, use OCR on the image
+            if text_from_pypdf2 and len(text_from_pypdf2.strip()) > 100: # Arbitrary threshold for "good" text
+                extracted_texts.append(text_from_pypdf2)
+            else:
+                # Use OCR on the current page image
+                # The image_obj is already a PIL Image
+                ocr_text = extract_text_from_image(image_obj) 
+                extracted_texts.append(ocr_text)
         
+        # At this point, len(pdf_images_pil) should be equal to len(extracted_texts)
+        return pdf_images_pil, extracted_texts
+        
+    except pdf2image.exceptions.PDFInfoNotInstalledError:
+        print("Poppler not installed or not in PATH. pdf2image cannot function.")
+        st.error("PDF processing error: Poppler utilities are not installed. Please check server configuration.")
+        return [], []
+    except Exception as e:
+        # General error catching during PDF processing
+        print(f"Error processing PDF: {e}")
+        # Optionally, provide a user-friendly message via Streamlit if appropriate here,
+        # or let the caller (app.py) handle it.
         return [], []
 
 def extract_text_from_pdf_file(pdf_file):
