@@ -8,14 +8,34 @@ from PIL import Image
 
 # Set page configuration
 st.set_page_config(
-    page_title="PDF Reader with OCR",
+    page_title="Enhanced PDF & Image Text Extractor",
     page_icon="📑",
     layout="wide"
 )
 
 # App title and description
-st.title("PDF Reader with OCR")
-st.markdown("Upload PDFs or images to extract and view text content. Navigate through pages easily.")
+st.title("Enhanced PDF & Image Text Extractor")
+st.markdown("""
+Upload PDFs or images to extract text content with high reliability. 
+This app uses multiple extraction methods and smart fallbacks to ensure the best possible results.
+""")
+
+# Add quality settings control in sidebar
+st.sidebar.title("Extraction Settings")
+extraction_quality = st.sidebar.select_slider(
+    "Extraction Quality",
+    options=["Fast", "Standard", "High Quality"],
+    value="Standard",
+    help="Higher quality uses more extraction methods but takes longer"
+)
+
+# Set DPI based on quality setting
+if extraction_quality == "Fast":
+    st.session_state.dpi = 150
+elif extraction_quality == "High Quality":
+    st.session_state.dpi = 400
+else:
+    st.session_state.dpi = 300
 
 # Initialize session state variables if they don't exist
 if 'pdf_pages' not in st.session_state:
@@ -62,22 +82,62 @@ def handle_file_upload():
                         temp_file.write(uploaded_file.getvalue())
                         temp_file_path = temp_file.name
                     
+                    # Show processing status
+                    progress_bar = st.progress(0)
+                    status_text = st.empty()
+                    
+                    # Get total pages for progress tracking
+                    total_pages = get_page_count(temp_file_path)
+                    if total_pages > 0:
+                        status_text.text(f"Processing PDF with {total_pages} pages...")
+                    
+                    # Configure processing based on quality settings
+                    dpi = st.session_state.dpi
+                    status_text.text(f"Extracting text at {dpi} DPI ({extraction_quality} quality)...")
+                    
                     # Process PDF file
-                    st.session_state.pdf_pages, st.session_state.extracted_text = process_pdf(temp_file_path)
+                    st.session_state.pdf_pages, st.session_state.extracted_text = process_pdf(
+                        temp_file_path, 
+                        dpi=dpi
+                    )
                     st.session_state.total_pages = len(st.session_state.pdf_pages)
+                    
+                    # Update progress
+                    progress_bar.progress(100)
+                    status_text.empty()
                     
                     # Remove temporary file
                     os.unlink(temp_file_path)
                 
                 else:  # Image file
+                    # Show processing status
+                    progress_bar = st.progress(0)
+                    status_text = st.empty()
+                    status_text.text(f"Processing image with {extraction_quality} quality...")
+                    progress_bar.progress(30)
+                    
                     # Process image file
                     image = Image.open(uploaded_file)
+                    
+                    # Apply preprocessing based on quality settings
+                    if extraction_quality == "High Quality":
+                        # For high quality, resize image to improve OCR
+                        width, height = image.size
+                        image = image.resize((int(width * 1.5), int(height * 1.5)), Image.LANCZOS)
+                        status_text.text("Applying high-quality image processing...")
+                    
+                    progress_bar.progress(60)
                     st.session_state.pdf_pages = [image]
                     
-                    # Use OCR to extract text
+                    # Extract text with multiple methods for better reliability
+                    status_text.text("Extracting text with OCR...")
                     extracted_text = extract_text_from_image(image)
                     st.session_state.extracted_text = [extracted_text]
                     st.session_state.total_pages = 1
+                    
+                    # Update progress
+                    progress_bar.progress(100)
+                    status_text.empty()
                 
                 st.session_state.file_processed = True
                 st.success(f"File processed successfully! Total pages: {st.session_state.total_pages}")
@@ -182,12 +242,25 @@ def display_content():
                     
                     # Highlight search term if present
                     if st.session_state.search_term and text:
-                        highlighted_text = text.replace(
-                            st.session_state.search_term, 
-                            f"**{st.session_state.search_term}**"
+                        # Use regex for case-insensitive search
+                        import re
+                        pattern = re.compile(re.escape(st.session_state.search_term), re.IGNORECASE)
+                        highlighted_text = pattern.sub(
+                            f"**{st.session_state.search_term}**", 
+                            text
                         )
                         st.markdown(highlighted_text)
                     else:
+                        # Add text quality indicator
+                        chars_per_page = len(text.strip())
+                        if chars_per_page > 1000:
+                            quality_indicator = "✅ Good text extraction"
+                        elif chars_per_page > 200:
+                            quality_indicator = "⚠️ Partial text extraction"
+                        else:
+                            quality_indicator = "❌ Poor text extraction"
+                            
+                        st.info(quality_indicator)
                         st.text_area("Extracted Text", text, height=400)
                 else:
                     st.warning("No text content available for this page.")
@@ -195,7 +268,7 @@ def display_content():
             else:  # Original view
                 if current_page < len(st.session_state.pdf_pages):
                     image = st.session_state.pdf_pages[current_page]
-                    st.image(image, caption=f"Page {current_page + 1}", use_container_width=True)
+                    st.image(image, caption=f"Page {current_page + 1}", use_column_width=True)
                 else:
                     st.warning("No image content available for this page.")
 
