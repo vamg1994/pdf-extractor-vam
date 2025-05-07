@@ -26,7 +26,7 @@ def clean_text(text):
     text = text.replace('|', 'I').replace('0', 'O')
     return text
 
-def process_pdf(pdf_path, dpi=300):
+def process_pdf(pdf_path, dpi=300, page_limit=None):
     """
     Process a PDF file, extracting both images and text using multiple methods
     for improved reliability
@@ -34,6 +34,7 @@ def process_pdf(pdf_path, dpi=300):
     Args:
         pdf_path: Path to the PDF file
         dpi: DPI for image conversion (higher = better quality but slower)
+        page_limit: Maximum number of pages to process (None for all pages)
         
     Returns:
     - list of PIL Image objects (one per page)
@@ -51,7 +52,16 @@ def process_pdf(pdf_path, dpi=300):
         with open(pdf_path, 'rb') as file:
             pdf_reader = PyPDF2.PdfReader(file)
             
-            for i, page in enumerate(pdf_reader.pages):
+            # If page_limit is specified, process only that many pages
+            total_pages = len(pdf_reader.pages)
+            pages_to_process = total_pages
+            
+            if page_limit and page_limit > 0:
+                pages_to_process = min(page_limit, total_pages)
+                # Truncate images list to match the limit
+                pdf_images = images[:pages_to_process]
+            
+            for i, page in enumerate(pdf_reader.pages[:pages_to_process]):
                 # Method 1: Extract text directly from PDF
                 pdf_text = page.extract_text() or ""
                 pdf_text = clean_text(pdf_text)

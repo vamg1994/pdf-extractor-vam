@@ -1,9 +1,17 @@
 import numpy as np
 import pytesseract
-from PIL import Image, ImageFilter, ImageEnhance, ImageOps, ImageChops
+from PIL import Image, ImageFilter, ImageEnhance, ImageOps
 import io
 import re
-import math
+import os
+import sys
+
+# Ensure tesseract can be found - fix for missing language files
+if sys.platform.startswith('linux'):
+    # Set the correct path to tesseract in the Replit environment
+    os.environ['PATH'] = f"{os.environ.get('PATH')}:/nix/store/44vcjbcy1p2yhc974bcw250k2r5x5cpa-tesseract-5.3.4/bin"
+    # Set the tessdata directory
+    os.environ['TESSDATA_PREFIX'] = "/nix/store/44vcjbcy1p2yhc974bcw250k2r5x5cpa-tesseract-5.3.4/share/tessdata"
 
 def preprocess_image(image, method="standard"):
     """
@@ -161,8 +169,23 @@ def extract_text_from_image(image, quality_level="standard"):
     Returns:
         Extracted text as string
     """
+    # Quick fallback for development environments where tesseract might not be properly configured
+    try:
+        pytesseract.get_tesseract_version()
+    except Exception as e:
+        print(f"Tesseract not properly configured: {e}")
+        return "OCR extraction failed: Tesseract OCR engine not available on this system."
     all_results = []
-    processing_time_limit = 60  # Seconds
+    # Reduce processing time to make app more responsive
+    processing_time_limit = 30  # Seconds
+    
+    # Resize large images for faster processing
+    if hasattr(image, 'width') and hasattr(image, 'height'):
+        if image.width > 2000 or image.height > 2000:
+            # Resize to a more reasonable size for faster processing
+            ratio = min(2000/image.width, 2000/image.height)
+            new_size = (int(image.width * ratio), int(image.height * ratio))
+            image = image.resize(new_size, Image.LANCZOS)
     
     try:
         # Adjust methods based on quality level
@@ -176,23 +199,25 @@ def extract_text_from_image(image, quality_level="standard"):
             preprocessing_methods = ["standard", "high_contrast", "document"]
             psm_modes = [6, 3, 4]  # Different page segmentation modes
         
-        # Try to detect text language for better OCR
+        # Language detection and configuration
+        # Simplify to just use English for now since other language files aren't available
         languages = "eng"  # Default to English
-        try:
-            # Get a small sample of text to detect language
-            # This is just a quick check with default settings
-            sample_text = pytesseract.image_to_string(image, config='--psm 6')
-            if sample_text and len(sample_text) > 50:
-                # Check for non-English characters
-                if any(ord(c) > 127 for c in sample_text):
-                    # If we find non-ASCII chars, use multi-language mode
-                    languages = "eng+deu+fra+spa+ita"  # English + common European languages
-        except:
-            # If language detection fails, default to English
-            pass
         
-        # Use the detected language(s)
-        lang_param = f" -l {languages}"
+        # Only use language specification if it's English
+        # This avoids errors with missing language files
+        lang_param = " -l eng"
+        
+        # Test Tesseract is working
+        try:
+            # Simple test with basic settings to check connectivity
+            test_result = pytesseract.image_to_string(
+                preprocess_image(image, method="standard"), 
+                config='--psm 6 -l eng'
+            )
+            # If we get here, tesseract is working
+        except Exception as test_error:
+            print(f"Tesseract test error: {test_error}")
+            return "OCR processing unavailable. Tesseract initialization failed."
         
         # Process with each method and PSM mode
         for method in preprocessing_methods:
@@ -203,10 +228,11 @@ def extract_text_from_image(image, quality_level="standard"):
                     # Configure OCR with language and specialized settings
                     custom_config = f'--oem 3 --psm {psm}{lang_param}'
                     
-                    # Add special configurations for certain types of content
+                    # Document mode needs special settings but avoid tessdata_dir
+                    # which seems to cause problems
                     if method == "document":
                         # For document mode, optimize for printed text
-                        custom_config += ' --tessdata-dir . -c preserve_interword_spaces=1'
+                        custom_config += ' -c preserve_interword_spaces=1'
                     
                     text = pytesseract.image_to_string(processed_img, config=custom_config)
                     
@@ -261,9 +287,10 @@ def clean_ocr_text(text):
     text = re.sub(r'(?<!\n)\n(?!\n)', ' ', text)  # Single newlines to spaces
     text = re.sub(r'\n{2,}', '\n\n', text)  # Multiple newlines to double newlines
     
-    # Fix number/letter confusion
-    text = re.sub(r'(\d)[oO](\d)', r'\10\2', text)  # Fix "0" vs "O" in numbers
-    text = re.sub(r'(\d)[lI](\d)', r'\11\2', text)  # Fix "1" vs "l" or "I" in numbers
+    # Fix number/letter confusion (using simpler approach to avoid regex reference issues)
+    text = text.replace('O0', '00').replace('0O', '00')
+    text = text.replace('l1', '11').replace('1l', '11')
+    text = text.replace('I1', '11').replace('1I', '11')
     
     # Remove garbage characters
     text = re.sub(r'[^\w\s\.\,\;\:\'\"\!\?\-\(\)\[\]\{\}\$\@\#\%\&\*\+\=\/\\]', '', text)
@@ -351,7 +378,8 @@ def enhance_text_extraction(pdf_text, ocr_text):
     # Clean up common OCR errors
     cleaned_text = base_text
     cleaned_text = re.sub(r'[|]', 'I', cleaned_text)  # Common OCR errors
-    cleaned_text = re.sub(r'(\d)[oO](\d)', r'\10\2', cleaned_text)  # Fix numbers
+    # Use simpler approach than regex backreferences
+    cleaned_text = cleaned_text.replace('O0', '00').replace('0O', '00')
     cleaned_text = re.sub(r'\s+', ' ', cleaned_text).strip()  # Clean whitespace
     
     return cleaned_text

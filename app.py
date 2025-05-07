@@ -133,11 +133,21 @@ def handle_file_upload():
                     dpi = st.session_state.dpi
                     status_text.text(f"Extracting text at {dpi} DPI ({extraction_quality} quality)...")
                     
-                    # Process PDF file
+                    # Process PDF file with optional page limit for large documents
+                    page_limit = None
+                    if total_pages > 20 and extraction_quality != "High Quality":
+                        status_text.text(f"Large document detected ({total_pages} pages). Processing first 10 pages for faster results...")
+                        page_limit = 10
+                        
                     st.session_state.pdf_pages, st.session_state.extracted_text = process_pdf(
                         temp_file_path, 
-                        dpi=dpi
+                        dpi=dpi,
+                        page_limit=page_limit
                     )
+                    
+                    # Inform user if we limited pages
+                    if page_limit and total_pages > page_limit:
+                        st.info(f"Processed first {page_limit} pages of {total_pages} for faster loading. Use High Quality setting for full document.")
                     st.session_state.total_pages = len(st.session_state.pdf_pages)
                     
                     # Update progress
