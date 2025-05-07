@@ -59,7 +59,13 @@ def process_pdf(pdf_path, dpi=300):
                 # Method 2: Use OCR on the page image
                 ocr_text = ""
                 if i < len(images):  # Ensure we have the corresponding image
-                    ocr_text = extract_text_from_image(images[i])
+                    # Get quality setting from session state if available
+                    import streamlit as st
+                    quality_level = "standard"
+                    if hasattr(st, "session_state") and hasattr(st.session_state, "ocr_quality"):
+                        quality_level = st.session_state.ocr_quality
+                    
+                    ocr_text = extract_text_from_image(images[i], quality_level=quality_level)
                     ocr_text = clean_text(ocr_text)
                 
                 # Choose the best result or combine them

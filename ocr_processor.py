@@ -1,8 +1,9 @@
 import numpy as np
 import pytesseract
-from PIL import Image, ImageFilter, ImageEnhance, ImageOps
+from PIL import Image, ImageFilter, ImageEnhance, ImageOps, ImageChops
 import io
 import re
+import math
 
 def preprocess_image(image, method="standard"):
     """
@@ -10,7 +11,7 @@ def preprocess_image(image, method="standard"):
     
     Args:
         image: PIL Image object
-        method: Preprocessing method to use (standard, high_contrast, document)
+        method: Preprocessing method to use (standard, high_contrast, document, advanced)
         
     Returns:
         Preprocessed PIL Image
@@ -37,9 +38,40 @@ def preprocess_image(image, method="standard"):
         # Increase size for better OCR
         w, h = img_gray.size
         img_resized = img_gray.resize((int(w*1.5), int(h*1.5)), Image.LANCZOS)
-        # Deskew if needed
-        img_deskewed = img_resized  # In a full implementation, add deskewing logic here
-        return img_deskewed
+        # Deskew if possible
+        try:
+            img_deskewed = deskew_image(img_resized)
+            return img_deskewed
+        except:
+            return img_resized
+            
+    elif method == "advanced":
+        # Advanced preprocessing for difficult documents
+        # Convert to grayscale and increase size
+        img_gray = image.convert('L')
+        w, h = img_gray.size
+        img_resized = img_gray.resize((int(w*1.5), int(h*1.5)), Image.LANCZOS)
+        
+        # Apply multiple enhancements
+        img_contrast = ImageEnhance.Contrast(img_resized).enhance(2.0)
+        img_sharp = ImageEnhance.Sharpness(img_contrast).enhance(1.5)
+        
+        # Apply denoising
+        img_denoised = img_sharp.filter(ImageFilter.MedianFilter(size=3))
+        
+        # Create binarized version with adaptive-like thresholding
+        # Calculate dynamic threshold based on image statistics
+        img_array = np.array(img_denoised)
+        threshold = np.mean(img_array) - 10  # Slightly lower than mean for better text retention
+        fn = lambda x: 255 if x > threshold else 0
+        img_binary = img_denoised.point(fn, mode='1')
+        
+        # Try to deskew
+        try:
+            img_deskewed = deskew_image(img_binary)
+            return img_deskewed
+        except:
+            return img_binary
     
     else:  # standard method
         # Convert to grayscale
@@ -62,49 +94,232 @@ def preprocess_image(image, method="standard"):
         
         return img_threshold
 
-def extract_text_from_image(image):
+def deskew_image(image):
+    """
+    Attempt to deskew an image by detecting the angle of text lines
+    This is a simple implementation that works for many documents
+    
+    Args:
+        image: PIL Image to deskew
+        
+    Returns:
+        Deskewed PIL Image
+    """
+    # Convert to numpy array for processing
+    img_array = np.array(image)
+    
+    # Simple method: find lines and calculate dominant angle
+    # This is a simplified version that uses horizontal projection
+    # For a real implementation, use Hough Transform
+    
+    # Get a rough estimate of skew angle based on horizontal projections
+    # Sum pixel values horizontally to find text lines
+    h_projection = np.sum(img_array, axis=1)
+    
+    # Calculate differences between adjacent rows to find line edges
+    diff = np.diff(h_projection)
+    
+    # Find peaks in the difference array (line starts and ends)
+    peaks = np.where(np.abs(diff) > np.std(diff))[0]
+    
+    if len(peaks) < 2:
+        # Not enough information to determine skew
+        return image
+    
+    # Simplistic approach: assume skew is under 15 degrees
+    # and test a few angles to see which gives most horizontal alignment
+    best_angle = 0
+    
+    # Test angles from -15 to 15 degrees in 1 degree increments
+    for angle in range(-15, 16):
+        # Rotate image to test angle
+        test_img = image.rotate(angle, resample=Image.BICUBIC, expand=False)
+        
+        # Calculate horizontal projection of rotated image
+        test_array = np.array(test_img)
+        h_proj = np.sum(test_array, axis=1)
+        
+        # Measure how "peaky" the projection is (more peaky = better aligned)
+        peakiness = np.std(h_proj)
+        
+        # Update best angle if this one is better
+        if angle == -15 or peakiness > np.std(h_projection):
+            best_angle = angle
+            h_projection = h_proj
+    
+    # Return the deskewed image using best angle
+    return image.rotate(best_angle, resample=Image.BICUBIC, expand=False)
+
+def extract_text_from_image(image, quality_level="standard"):
     """
     Extract text from an image using OCR with multiple attempts for reliability
     
     Args:
         image: PIL Image object
+        quality_level: Quality level for extraction (fast, standard, high)
         
     Returns:
         Extracted text as string
     """
     all_results = []
+    processing_time_limit = 60  # Seconds
     
     try:
-        # Try multiple preprocessing methods and configurations
-        preprocessing_methods = ["standard", "high_contrast", "document"]
-        psm_modes = [6, 3, 4]  # Different page segmentation modes
+        # Adjust methods based on quality level
+        if quality_level == "fast":
+            preprocessing_methods = ["standard"]
+            psm_modes = [6]  # Single uniform block of text
+        elif quality_level == "high":
+            preprocessing_methods = ["standard", "high_contrast", "document", "advanced"]
+            psm_modes = [6, 3, 4, 11, 12]  # Add more segmentation modes
+        else:  # standard
+            preprocessing_methods = ["standard", "high_contrast", "document"]
+            psm_modes = [6, 3, 4]  # Different page segmentation modes
         
+        # Try to detect text language for better OCR
+        languages = "eng"  # Default to English
+        try:
+            # Get a small sample of text to detect language
+            # This is just a quick check with default settings
+            sample_text = pytesseract.image_to_string(image, config='--psm 6')
+            if sample_text and len(sample_text) > 50:
+                # Check for non-English characters
+                if any(ord(c) > 127 for c in sample_text):
+                    # If we find non-ASCII chars, use multi-language mode
+                    languages = "eng+deu+fra+spa+ita"  # English + common European languages
+        except:
+            # If language detection fails, default to English
+            pass
+        
+        # Use the detected language(s)
+        lang_param = f" -l {languages}"
+        
+        # Process with each method and PSM mode
         for method in preprocessing_methods:
             processed_img = preprocess_image(image, method=method)
             
             for psm in psm_modes:
                 try:
-                    custom_config = f'--oem 3 --psm {psm}'
+                    # Configure OCR with language and specialized settings
+                    custom_config = f'--oem 3 --psm {psm}{lang_param}'
+                    
+                    # Add special configurations for certain types of content
+                    if method == "document":
+                        # For document mode, optimize for printed text
+                        custom_config += ' --tessdata-dir . -c preserve_interword_spaces=1'
+                    
                     text = pytesseract.image_to_string(processed_img, config=custom_config)
                     
                     # Only keep results that actually have content
                     if text and len(text.strip()) > 10:
+                        # Perform basic text cleanup
+                        text = clean_ocr_text(text)
                         all_results.append(text)
+                        
                 except Exception as inner_e:
                     print(f"OCR attempt failed with method {method}, psm {psm}: {inner_e}")
                     continue
         
         if all_results:
-            # Get the result with the most content (usually the best one)
-            best_result = max(all_results, key=lambda x: len(x.strip()))
+            # Advanced selection: instead of just longest text, 
+            # look at word count, character clarity, and content
+            best_result = select_best_ocr_result(all_results)
             return best_result
         else:
-            # If all attempts failed, try one last bare-bones attempt
-            return pytesseract.image_to_string(image)
+            # If all attempts failed, try one last approach with very basic settings
+            # Sometimes simpler is better for difficult images
+            try:
+                text = pytesseract.image_to_string(image, config='-l eng --psm 6')
+                return clean_ocr_text(text) if text else "No text was detected."
+            except:
+                return "OCR processing failed."
             
     except Exception as e:
         print(f"OCR Error: {e}")
         return "OCR processing failed."
+
+def clean_ocr_text(text):
+    """
+    Clean and normalize OCR text to improve readability
+    
+    Args:
+        text: Raw OCR text
+    
+    Returns:
+        Cleaned text
+    """
+    if not text:
+        return ""
+        
+    # Replace common OCR errors
+    text = re.sub(r'[|]', 'I', text)  # Pipe to I
+    text = re.sub(r'[\u201C\u201D]', '"', text)  # Fancy quotes to standard quotes
+    text = re.sub(r'[\u2018\u2019]', "'", text)  # Fancy apostrophes
+    
+    # Fix spacing issues
+    text = re.sub(r'(\w)- (\w)', r'\1\2', text)  # Remove hyphenation
+    text = re.sub(r'(?<!\n)\n(?!\n)', ' ', text)  # Single newlines to spaces
+    text = re.sub(r'\n{2,}', '\n\n', text)  # Multiple newlines to double newlines
+    
+    # Fix number/letter confusion
+    text = re.sub(r'(\d)[oO](\d)', r'\10\2', text)  # Fix "0" vs "O" in numbers
+    text = re.sub(r'(\d)[lI](\d)', r'\11\2', text)  # Fix "1" vs "l" or "I" in numbers
+    
+    # Remove garbage characters
+    text = re.sub(r'[^\w\s\.\,\;\:\'\"\!\?\-\(\)\[\]\{\}\$\@\#\%\&\*\+\=\/\\]', '', text)
+    
+    # Fix whitespace
+    text = re.sub(r'\s+', ' ', text).strip()
+    
+    return text
+
+def select_best_ocr_result(results):
+    """
+    Select the best OCR result from multiple attempts
+    
+    Args:
+        results: List of OCR text results
+    
+    Returns:
+        Best result based on quality heuristics
+    """
+    if not results:
+        return ""
+    if len(results) == 1:
+        return results[0]
+    
+    # Score each result on multiple factors
+    scores = []
+    
+    for text in results:
+        score = 0
+        
+        # 1. Length score - longer text often has more content
+        score += len(text.strip()) * 0.01
+        
+        # 2. Word count score - more words is usually better
+        words = re.findall(r'\b\w+\b', text.lower())
+        score += len(words) * 0.5
+        
+        # 3. Average word length - if too short, might be garbage
+        avg_word_len = sum(len(w) for w in words) / max(1, len(words))
+        if 3 <= avg_word_len <= 10:  # Reasonable word length range
+            score += 10
+        
+        # 4. Proportion of garbage characters - lower is better
+        garbage_count = len(re.findall(r'[^\w\s\.\,\;\:\'\"\!\?\-\(\)\[\]\{\}\$\@\#\%\&\*\+\=\/\\]', text))
+        garbage_ratio = garbage_count / max(1, len(text))
+        score -= garbage_ratio * 100
+        
+        # 5. Sentence-like patterns - text with proper sentences is likely better
+        sentence_like = len(re.findall(r'[A-Z][^\.!?]*[\.!?]', text))
+        score += sentence_like * 5
+        
+        scores.append(score)
+    
+    # Return the result with the highest score
+    best_index = scores.index(max(scores))
+    return results[best_index]
 
 def enhance_text_extraction(pdf_text, ocr_text):
     """

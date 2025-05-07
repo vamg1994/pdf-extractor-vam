@@ -29,13 +29,51 @@ extraction_quality = st.sidebar.select_slider(
     help="Higher quality uses more extraction methods but takes longer"
 )
 
-# Set DPI based on quality setting
-if extraction_quality == "Fast":
-    st.session_state.dpi = 150
-elif extraction_quality == "High Quality":
-    st.session_state.dpi = 400
-else:
-    st.session_state.dpi = 300
+# Add language detection option
+language_detect = st.sidebar.checkbox(
+    "Auto-detect languages", 
+    value=True,
+    help="Automatically detect document language for better OCR"
+)
+
+# Add advanced options with expander
+with st.sidebar.expander("Advanced Settings"):
+    # Set DPI setting
+    dpi_options = {
+        "Fast": 150,
+        "Standard": 300,
+        "High Quality": 400
+    }
+    
+    custom_dpi = st.slider(
+        "DPI Resolution", 
+        min_value=72, 
+        max_value=600, 
+        value=dpi_options[extraction_quality],
+        step=50,
+        help="Higher DPI improves quality but increases processing time"
+    )
+    
+    # Add deskew option
+    deskew_option = st.checkbox(
+        "Auto-deskew pages", 
+        value=True,
+        help="Automatically straighten tilted documents"
+    )
+    
+    # Add enhanced text cleaning option
+    text_cleaning = st.checkbox(
+        "Enhanced text cleaning", 
+        value=True,
+        help="Apply advanced text cleanup for better readability"
+    )
+
+# Set settings in session state
+st.session_state.dpi = custom_dpi
+st.session_state.deskew = deskew_option
+st.session_state.text_cleaning = text_cleaning
+st.session_state.language_detect = language_detect
+st.session_state.ocr_quality = extraction_quality.lower().replace(" quality", "")
 
 # Initialize session state variables if they don't exist
 if 'pdf_pages' not in st.session_state:
@@ -131,7 +169,11 @@ def handle_file_upload():
                     
                     # Extract text with multiple methods for better reliability
                     status_text.text("Extracting text with OCR...")
-                    extracted_text = extract_text_from_image(image)
+                    # Pass the quality level to the OCR engine
+                    extracted_text = extract_text_from_image(
+                        image, 
+                        quality_level=st.session_state.ocr_quality
+                    )
                     st.session_state.extracted_text = [extracted_text]
                     st.session_state.total_pages = 1
                     
